@@ -11,6 +11,7 @@ from autogen_core.base import AgentId, AgentProxy
 from autogen_core.components.code_executor import CodeBlock
 from autogen_ext.code_executors import DockerCommandLineCodeExecutor
 from autogen_magentic_one.agents.coder import Coder, Executor
+from autogen_magentic_one.agents.document_preprocessor import DocumentPreprocessor
 from autogen_magentic_one.agents.file_surfer import FileSurfer
 from autogen_magentic_one.agents.multimodal_web_surfer import MultimodalWebSurfer
 from autogen_magentic_one.agents.orchestrator import LedgerOrchestrator
@@ -41,6 +42,11 @@ async def main(logs_dir: str, hil_mode: bool, save_screenshots: bool) -> None:
         await Coder.register(runtime, "Coder", lambda: Coder(model_client=client))
         coder = AgentProxy(AgentId("Coder", "default"), runtime)
 
+        # Register agents.
+        await DocumentPreprocessor.register(runtime, "DocumentPreprocessor", DocumentPreprocessor)
+        document_preprocessor = AgentProxy(AgentId("DocumentPreprocessor", "default"), runtime)
+
+
         await Executor.register(
             runtime,
             "Executor",
@@ -62,7 +68,7 @@ async def main(logs_dir: str, hil_mode: bool, save_screenshots: bool) -> None:
         )
         user_proxy = AgentProxy(AgentId("UserProxy", "default"), runtime)
 
-        agent_list = [web_surfer, coder, executor, file_surfer]
+        agent_list = [web_surfer, coder, document_preprocessor, executor, file_surfer]
         if hil_mode:
             agent_list.append(user_proxy)
 
