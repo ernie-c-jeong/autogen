@@ -2,15 +2,17 @@ import asyncio
 import json
 from typing import Any, Coroutine, Dict, List, Mapping, Sequence, Tuple
 
-from autogen_core.base import AgentId, CancellationToken, MessageContext
-from autogen_core.components import (
+from autogen_core import (
+    AgentId,
+    CancellationToken,
     DefaultTopicId,
     FunctionCall,
+    MessageContext,
     RoutedAgent,
     message_handler,
 )
-from autogen_core.components.model_context import ChatCompletionContext
-from autogen_core.components.models import (
+from autogen_core.model_context import ChatCompletionContext
+from autogen_core.models import (
     AssistantMessage,
     ChatCompletionClient,
     FunctionExecutionResult,
@@ -18,7 +20,7 @@ from autogen_core.components.models import (
     SystemMessage,
     UserMessage,
 )
-from autogen_core.components.tools import Tool
+from autogen_core.tools import Tool
 
 from ..types import (
     FunctionCallMessage,
@@ -250,12 +252,12 @@ class ChatCompletionAgent(RoutedAgent):
             result_as_str = f"Error: {str(e)}"
         return (result_as_str, call_id)
 
-    def save_state(self) -> Mapping[str, Any]:
+    async def save_state(self) -> Mapping[str, Any]:
         return {
             "memory": self._model_context.save_state(),
             "system_messages": self._system_messages,
         }
 
-    def load_state(self, state: Mapping[str, Any]) -> None:
+    async def load_state(self, state: Mapping[str, Any]) -> None:
         self._model_context.load_state(state["memory"])
         self._system_messages = state["system_messages"]

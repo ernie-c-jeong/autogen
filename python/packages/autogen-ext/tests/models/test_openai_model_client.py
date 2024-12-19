@@ -1,11 +1,10 @@
 import asyncio
-from typing import Any, AsyncGenerator, List, Tuple
+from typing import Annotated, Any, AsyncGenerator, List, Tuple
 from unittest.mock import MagicMock
 
 import pytest
-from autogen_core.base import CancellationToken
-from autogen_core.components import Image
-from autogen_core.components.models import (
+from autogen_core import CancellationToken, Image
+from autogen_core.models import (
     AssistantMessage,
     CreateResult,
     FunctionExecutionResult,
@@ -15,17 +14,25 @@ from autogen_core.components.models import (
     SystemMessage,
     UserMessage,
 )
-from autogen_core.components.tools import FunctionTool
-from autogen_ext.models import AzureOpenAIChatCompletionClient, OpenAIChatCompletionClient
-from autogen_ext.models._openai._model_info import resolve_model
-from autogen_ext.models._openai._openai_client import calculate_vision_tokens
+from autogen_core.tools import BaseTool, FunctionTool
+from autogen_ext.models.openai import AzureOpenAIChatCompletionClient, OpenAIChatCompletionClient
+from autogen_ext.models.openai._model_info import resolve_model
+from autogen_ext.models.openai._openai_client import calculate_vision_tokens, convert_tools
 from openai.resources.chat.completions import AsyncCompletions
 from openai.types.chat.chat_completion import ChatCompletion, Choice
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, ChoiceDelta
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class MyResult(BaseModel):
+    result: str = Field(description="The other description.")
+
+
+class MyArgs(BaseModel):
+    query: str = Field(description="The description.")
 
 
 class MockChunkDefinition(BaseModel):
@@ -133,6 +140,7 @@ async def test_openai_chat_completion_client() -> None:
 @pytest.mark.asyncio
 async def test_azure_openai_chat_completion_client() -> None:
     client = AzureOpenAIChatCompletionClient(
+        azure_deployment="gpt-4o-1",
         model="gpt-4o",
         api_key="api_key",
         api_version="2020-08-04",
@@ -267,9 +275,7 @@ async def test_openai_chat_completion_client_count_tokens(monkeypatch: pytest.Mo
     tools = [FunctionTool(tool1, description="example tool 1"), FunctionTool(tool2, description="example tool 2")]
 
     mockcalculate_vision_tokens = MagicMock()
-    monkeypatch.setattr(
-        "autogen_ext.models._openai._openai_client.calculate_vision_tokens", mockcalculate_vision_tokens
-    )
+    monkeypatch.setattr("autogen_ext.models.openai._openai_client.calculate_vision_tokens", mockcalculate_vision_tokens)
 
     num_tokens = client.count_tokens(messages, tools=tools)
     assert num_tokens
@@ -302,3 +308,38 @@ def test_openai_count_image_tokens(mock_size: Tuple[int, int], expected_num_toke
     # Directly call calculate_vision_tokens and check the result
     calculated_tokens = calculate_vision_tokens(mock_image, detail="auto")
     assert calculated_tokens == expected_num_tokens
+
+
+def test_convert_tools_accepts_both_func_tool_and_schema() -> None:
+    def my_function(arg: str, other: Annotated[int, "int arg"], nonrequired: int = 5) -> MyResult:
+        return MyResult(result="test")
+
+    tool = FunctionTool(my_function, description="Function tool.")
+    schema = tool.schema
+
+    converted_tool_schema = convert_tools([tool, schema])
+
+    assert len(converted_tool_schema) == 2
+    assert converted_tool_schema[0] == converted_tool_schema[1]
+
+
+def test_convert_tools_accepts_both_tool_and_schema() -> None:
+    class MyTool(BaseTool[MyArgs, MyResult]):
+        def __init__(self) -> None:
+            super().__init__(
+                args_type=MyArgs,
+                return_type=MyResult,
+                name="TestTool",
+                description="Description of test tool.",
+            )
+
+        async def run(self, args: MyArgs, cancellation_token: CancellationToken) -> MyResult:
+            return MyResult(result="value")
+
+    tool = MyTool()
+    schema = tool.schema
+
+    converted_tool_schema = convert_tools([tool, schema])
+
+    assert len(converted_tool_schema) == 2
+    assert converted_tool_schema[0] == converted_tool_schema[1]

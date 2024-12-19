@@ -5,7 +5,7 @@ using Azure.Identity;
 using DevTeam.Backend;
 using DevTeam.Options;
 using Microsoft.AI.DevTeam;
-using Microsoft.AutoGen.Agents;
+using Microsoft.AutoGen.Core;
 using Microsoft.AutoGen.Extensions.SemanticKernel;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Options;
@@ -67,9 +67,9 @@ app.UseRouting()
 }); ;
 
 app.UseSwagger();
-app.UseSwaggerUI(c =>
+/* app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
-});
+}); */
 
 app.Run();

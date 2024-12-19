@@ -1,11 +1,11 @@
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, List
 
-from autogen_core.base import MessageContext
-from autogen_core.components import DefaultTopicId, event
+from autogen_core import DefaultTopicId, MessageContext, event, rpc
 
 from ...base import TerminationCondition
-from ...messages import AgentMessage, StopMessage
+from ...messages import AgentEvent, ChatMessage, StopMessage
 from ._events import (
     GroupChatAgentResponse,
     GroupChatRequestPublish,
@@ -48,14 +48,14 @@ class BaseGroupChatManager(SequentialRoutedAgent, ABC):
             raise ValueError("The group topic type must not be in the participant topic types.")
         self._participant_topic_types = participant_topic_types
         self._participant_descriptions = participant_descriptions
-        self._message_thread: List[AgentMessage] = []
+        self._message_thread: List[AgentEvent | ChatMessage] = []
         self._termination_condition = termination_condition
         if max_turns is not None and max_turns <= 0:
             raise ValueError("The maximum number of turns must be greater than 0.")
         self._max_turns = max_turns
         self._current_turn = 0
 
-    @event
+    @rpc
     async def handle_start(self, message: GroupChatStart, ctx: MessageContext) -> None:
         """Handle the start of a group chat by selecting a speaker to start the conversation."""
 
@@ -70,16 +70,28 @@ class BaseGroupChatManager(SequentialRoutedAgent, ABC):
             # Stop the group chat.
             return
 
-        if message.message is not None:
-            # Log the start message.
-            await self.publish_message(message, topic_id=DefaultTopicId(type=self._output_topic_type))
+        # Validate the group state given the start messages
+        await self.validate_group_state(message.messages)
 
-            # Append the user message to the message thread.
-            self._message_thread.append(message.message)
+        if message.messages is not None:
+            # Log all messages at once
+            await self.publish_message(
+                GroupChatStart(messages=message.messages), topic_id=DefaultTopicId(type=self._output_topic_type)
+            )
 
-            # Check if the conversation should be terminated.
+            # Relay all messages at once to participants
+            await self.publish_message(
+                GroupChatStart(messages=message.messages),
+                topic_id=DefaultTopicId(type=self._group_topic_type),
+                cancellation_token=ctx.cancellation_token,
+            )
+
+            # Append all messages to thread
+            self._message_thread.extend(message.messages)
+
+            # Check termination condition after processing all messages
             if self._termination_condition is not None:
-                stop_message = await self._termination_condition([message.message])
+                stop_message = await self._termination_condition(message.messages)
                 if stop_message is not None:
                     await self.publish_message(
                         GroupChatTermination(message=stop_message),
@@ -89,13 +101,21 @@ class BaseGroupChatManager(SequentialRoutedAgent, ABC):
                     await self._termination_condition.reset()
                     return
 
-        speaker_topic_type = await self.select_speaker(self._message_thread)
-        await self.publish_message(GroupChatRequestPublish(), topic_id=DefaultTopicId(type=speaker_topic_type))
+        # Select a speaker to start/continue the conversation
+        speaker_topic_type_future = asyncio.ensure_future(self.select_speaker(self._message_thread))
+        # Link the select speaker future to the cancellation token.
+        ctx.cancellation_token.link_future(speaker_topic_type_future)
+        speaker_topic_type = await speaker_topic_type_future
+        await self.publish_message(
+            GroupChatRequestPublish(),
+            topic_id=DefaultTopicId(type=speaker_topic_type),
+            cancellation_token=ctx.cancellation_token,
+        )
 
     @event
     async def handle_agent_response(self, message: GroupChatAgentResponse, ctx: MessageContext) -> None:
         # Append the message to the message thread and construct the delta.
-        delta: List[AgentMessage] = []
+        delta: List[AgentEvent | ChatMessage] = []
         if message.agent_response.inner_messages is not None:
             for inner_message in message.agent_response.inner_messages:
                 self._message_thread.append(inner_message)
@@ -134,16 +154,33 @@ class BaseGroupChatManager(SequentialRoutedAgent, ABC):
                 return
 
         # Select a speaker to continue the conversation.
-        speaker_topic_type = await self.select_speaker(self._message_thread)
-        await self.publish_message(GroupChatRequestPublish(), topic_id=DefaultTopicId(type=speaker_topic_type))
+        speaker_topic_type_future = asyncio.ensure_future(self.select_speaker(self._message_thread))
+        # Link the select speaker future to the cancellation token.
+        ctx.cancellation_token.link_future(speaker_topic_type_future)
+        speaker_topic_type = await speaker_topic_type_future
+        await self.publish_message(
+            GroupChatRequestPublish(),
+            topic_id=DefaultTopicId(type=speaker_topic_type),
+            cancellation_token=ctx.cancellation_token,
+        )
 
-    @event
+    @rpc
     async def handle_reset(self, message: GroupChatReset, ctx: MessageContext) -> None:
         # Reset the group chat manager.
         await self.reset()
 
     @abstractmethod
-    async def select_speaker(self, thread: List[AgentMessage]) -> str:
+    async def validate_group_state(self, messages: List[ChatMessage] | None) -> None:
+        """Validate the state of the group chat given the start messages.
+        This is executed when the group chat manager receives a GroupChatStart event.
+
+        Args:
+            messages: A list of chat messages to validate, or None if no messages are provided.
+        """
+        ...
+
+    @abstractmethod
+    async def select_speaker(self, thread: List[AgentEvent | ChatMessage]) -> str:
         """Select a speaker from the participants and return the
         topic type of the selected speaker."""
         ...

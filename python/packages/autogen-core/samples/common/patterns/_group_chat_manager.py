@@ -1,10 +1,9 @@
 import logging
 from typing import Any, Callable, List, Mapping
 
-from autogen_core.base import AgentId, AgentProxy, MessageContext
-from autogen_core.components import RoutedAgent, message_handler
-from autogen_core.components.model_context import ChatCompletionContext
-from autogen_core.components.models import ChatCompletionClient, UserMessage
+from autogen_core import AgentId, AgentProxy, MessageContext, RoutedAgent, message_handler
+from autogen_core.model_context import ChatCompletionContext
+from autogen_core.models import ChatCompletionClient, UserMessage
 
 from ..types import (
     MultiModalMessage,
@@ -142,12 +141,12 @@ class GroupChatManager(RoutedAgent):
             # Send the message to the selected speaker to ask it to publish a response.
             await self.send_message(PublishNow(), speaker)
 
-    def save_state(self) -> Mapping[str, Any]:
+    async def save_state(self) -> Mapping[str, Any]:
         return {
             "chat_history": self._model_context.save_state(),
             "termination_word": self._termination_word,
         }
 
-    def load_state(self, state: Mapping[str, Any]) -> None:
+    async def load_state(self, state: Mapping[str, Any]) -> None:
         self._model_context.load_state(state["chat_history"])
         self._termination_word = state["termination_word"]

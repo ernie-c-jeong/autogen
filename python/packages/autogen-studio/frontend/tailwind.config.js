@@ -9,7 +9,7 @@ module.exports = {
       typography: {
         DEFAULT: {
           css: {
-            maxWidth: "100ch", // add required value here
+            maxWidth: "100ch",
           },
         },
       },
@@ -17,7 +17,7 @@ module.exports = {
         height: "height",
         spacing: "margin, padding",
       },
-      backgroundColor: {
+      colors: {
         primary: "var(--color-bg-primary)",
         secondary: "var(--color-bg-secondary)",
         accent: "var(--color-bg-accent)",
@@ -34,7 +34,23 @@ module.exports = {
         primary: "var(--color-border-primary)",
         secondary: "var(--color-border-secondary)",
       },
+      ringColor: {
+        accent: "var(--color-text-accent)",
+        primary: "var(--color-text-primary)",
+        secondary: "var(--color-text-secondary)",
+      },
     },
   },
-  plugins: [require("@tailwindcss/typography")],
+  plugins: [
+    require("@tailwindcss/typography"),
+    function ({ addBase, theme }) {
+      addBase({
+        ":root": {
+          "--tw-bg-opacity": "1",
+          "--tw-text-opacity": "1",
+          "--tw-border-opacity": "1",
+        },
+      });
+    },
+  ],
 };

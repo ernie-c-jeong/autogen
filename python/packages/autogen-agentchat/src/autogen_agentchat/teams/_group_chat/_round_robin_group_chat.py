@@ -1,7 +1,8 @@
-from typing import Callable, List
+from typing import Any, Callable, List, Mapping
 
 from ...base import ChatAgent, TerminationCondition
-from ...messages import AgentMessage
+from ...messages import AgentEvent, ChatMessage
+from ...state import RoundRobinManagerState
 from ._base_group_chat import BaseGroupChat
 from ._base_group_chat_manager import BaseGroupChatManager
 
@@ -28,6 +29,9 @@ class RoundRobinGroupChatManager(BaseGroupChatManager):
         )
         self._next_speaker_index = 0
 
+    async def validate_group_state(self, messages: List[ChatMessage] | None) -> None:
+        pass
+
     async def reset(self) -> None:
         self._current_turn = 0
         self._message_thread.clear()
@@ -35,7 +39,21 @@ class RoundRobinGroupChatManager(BaseGroupChatManager):
             await self._termination_condition.reset()
         self._next_speaker_index = 0
 
-    async def select_speaker(self, thread: List[AgentMessage]) -> str:
+    async def save_state(self) -> Mapping[str, Any]:
+        state = RoundRobinManagerState(
+            message_thread=list(self._message_thread),
+            current_turn=self._current_turn,
+            next_speaker_index=self._next_speaker_index,
+        )
+        return state.model_dump()
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        round_robin_state = RoundRobinManagerState.model_validate(state)
+        self._message_thread = list(round_robin_state.message_thread)
+        self._current_turn = round_robin_state.current_turn
+        self._next_speaker_index = round_robin_state.next_speaker_index
+
+    async def select_speaker(self, thread: List[AgentEvent | ChatMessage]) -> str:
         """Select a speaker from the participants in a round-robin fashion."""
         current_speaker_index = self._next_speaker_index
         self._next_speaker_index = (current_speaker_index + 1) % len(self._participant_topic_types)
@@ -65,10 +83,11 @@ class RoundRobinGroupChat(BaseGroupChat):
         .. code-block:: python
 
             import asyncio
-            from autogen_ext.models import OpenAIChatCompletionClient
+            from autogen_ext.models.openai import OpenAIChatCompletionClient
             from autogen_agentchat.agents import AssistantAgent
             from autogen_agentchat.teams import RoundRobinGroupChat
-            from autogen_agentchat.task import TextMentionTermination
+            from autogen_agentchat.conditions import TextMentionTermination
+            from autogen_agentchat.ui import Console
 
 
             async def main() -> None:
@@ -84,9 +103,7 @@ class RoundRobinGroupChat(BaseGroupChat):
                 )
                 termination = TextMentionTermination("TERMINATE")
                 team = RoundRobinGroupChat([assistant], termination_condition=termination)
-                stream = team.run_stream("What's the weather in New York?")
-                async for message in stream:
-                    print(message)
+                await Console(team.run_stream(task="What's the weather in New York?"))
 
 
             asyncio.run(main())
@@ -96,10 +113,11 @@ class RoundRobinGroupChat(BaseGroupChat):
         .. code-block:: python
 
             import asyncio
-            from autogen_ext.models import OpenAIChatCompletionClient
+            from autogen_ext.models.openai import OpenAIChatCompletionClient
             from autogen_agentchat.agents import AssistantAgent
             from autogen_agentchat.teams import RoundRobinGroupChat
-            from autogen_agentchat.task import TextMentionTermination
+            from autogen_agentchat.conditions import TextMentionTermination
+            from autogen_agentchat.ui import Console
 
 
             async def main() -> None:
@@ -109,9 +127,7 @@ class RoundRobinGroupChat(BaseGroupChat):
                 agent2 = AssistantAgent("Assistant2", model_client=model_client)
                 termination = TextMentionTermination("TERMINATE")
                 team = RoundRobinGroupChat([agent1, agent2], termination_condition=termination)
-                stream = team.run_stream("Tell me some jokes.")
-                async for message in stream:
-                    print(message)
+                await Console(team.run_stream(task="Tell me some jokes."))
 
 
             asyncio.run(main())

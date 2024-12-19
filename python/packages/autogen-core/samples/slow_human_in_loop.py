@@ -30,18 +30,26 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
-from autogen_core.application import SingleThreadedAgentRuntime
-from autogen_core.base import AgentId, CancellationToken, MessageContext
+from autogen_core import (
+    AgentId,
+    CancellationToken,
+    DefaultTopicId,
+    FunctionCall,
+    MessageContext,
+    RoutedAgent,
+    SingleThreadedAgentRuntime,
+    message_handler,
+    type_subscription,
+)
 from autogen_core.base.intervention import DefaultInterventionHandler
-from autogen_core.components import DefaultSubscription, DefaultTopicId, FunctionCall, RoutedAgent, message_handler
-from autogen_core.components.model_context import BufferedChatCompletionContext
-from autogen_core.components.models import (
+from autogen_core.model_context import BufferedChatCompletionContext
+from autogen_core.models import (
     AssistantMessage,
     ChatCompletionClient,
     SystemMessage,
     UserMessage,
 )
-from autogen_core.components.tools import BaseTool
+from autogen_core.tools import BaseTool
 from common.types import TextMessage
 from common.utils import get_chat_completion_client_from_envs
 from pydantic import BaseModel, Field
@@ -81,6 +89,7 @@ class MockPersistence:
 state_persister = MockPersistence()
 
 
+@type_subscription("scheduling_assistant_conversation")
 class SlowUserProxyAgent(RoutedAgent):
     def __init__(
         self,
@@ -98,13 +107,13 @@ class SlowUserProxyAgent(RoutedAgent):
             GetSlowUserMessage(content=message.content), topic_id=DefaultTopicId("scheduling_assistant_conversation")
         )
 
-    def save_state(self) -> Mapping[str, Any]:
+    async def save_state(self) -> Mapping[str, Any]:
         state_to_save = {
             "memory": self._model_context.save_state(),
         }
         return state_to_save
 
-    def load_state(self, state: Mapping[str, Any]) -> None:
+    async def load_state(self, state: Mapping[str, Any]) -> None:
         self._model_context.load_state({**state["memory"], "messages": [m for m in state["memory"]["messages"]]})
 
 
@@ -132,6 +141,7 @@ class ScheduleMeetingTool(BaseTool[ScheduleMeetingInput, ScheduleMeetingOutput])
         return ScheduleMeetingOutput()
 
 
+@type_subscription("scheduling_assistant_conversation")
 class SchedulingAssistantAgent(RoutedAgent):
     def __init__(
         self,
@@ -150,12 +160,14 @@ class SchedulingAssistantAgent(RoutedAgent):
         self._name = name
         self._model_client = model_client
         self._system_messages = [
-            SystemMessage(f"""
+            SystemMessage(
+                content=f"""
 I am a helpful AI assistant that helps schedule meetings.
 If there are missing parameters, I will ask for them.
 
 Today's date is {datetime.datetime.now().strftime("%Y-%m-%d")}
-""")
+"""
+            )
         ]
 
     @message_handler
@@ -186,12 +198,12 @@ Today's date is {datetime.datetime.now().strftime("%Y-%m-%d")}
 
         await self.publish_message(speech, topic_id=DefaultTopicId("scheduling_assistant_conversation"))
 
-    def save_state(self) -> Mapping[str, Any]:
+    async def save_state(self) -> Mapping[str, Any]:
         return {
             "memory": self._model_context.save_state(),
         }
 
-    def load_state(self, state: Mapping[str, Any]) -> None:
+    async def load_state(self, state: Mapping[str, Any]) -> None:
         self._model_context.load_state({**state["memory"], "messages": [m for m in state["memory"]["messages"]]})
 
 
@@ -256,16 +268,13 @@ async def main(latest_user_input: Optional[str] = None) -> None | str:
     needs_user_input_handler = NeedsUserInputHandler()
     runtime = SingleThreadedAgentRuntime(intervention_handlers=[needs_user_input_handler, termination_handler])
 
-    await runtime.register(
-        "User",
-        lambda: SlowUserProxyAgent("User", "I am a user"),
-        subscriptions=lambda: [DefaultSubscription("scheduling_assistant_conversation")],
-    )
+    await SlowUserProxyAgent.register(runtime, "User", lambda: SlowUserProxyAgent("User", "I am a user"))
 
     initial_schedule_assistant_message = AssistantTextMessage(
         content="Hi! How can I help you? I can help schedule meetings", source="User"
     )
-    await runtime.register(
+    await SchedulingAssistantAgent.register(
+        runtime,
         "SchedulingAssistant",
         lambda: SchedulingAssistantAgent(
             "SchedulingAssistant",
@@ -273,7 +282,6 @@ async def main(latest_user_input: Optional[str] = None) -> None | str:
             model_client=get_chat_completion_client_from_envs(model="gpt-4o-mini"),
             initial_message=initial_schedule_assistant_message,
         ),
-        subscriptions=lambda: [DefaultSubscription("scheduling_assistant_conversation")],
     )
 
     if latest_user_input is not None:
